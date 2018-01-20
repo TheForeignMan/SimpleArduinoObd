@@ -35,10 +35,10 @@ bool responseReceived = false;
 const char obdMacAddress[] = "1D,A5,68988B";
 const char cmdCheck[] = "AT";
 const char cmdInit[] = "+INIT";
-const char cmdPair[] = "AT+PAIR=";
+const char cmdPair[] = "+PAIR=";
 const char cmdPairTimeout[] = ",10";
-const char cmdPairCheck[] = "AT+FSAD=";
-const char cmdConnect[] = "AT+LINK=";
+const char cmdPairCheck[] = "+FSAD=";
+const char cmdConnect[] = "+LINK=";
 const char cmdPids[] = "0100";
 const char cmdRpm[] = "010C";
 const char cmdSpeed[] = "010D";
@@ -47,10 +47,13 @@ const char newLine[] = "\r\n";
 const char btResponseOk[] = "OK";
 const char btResponseError[] = "ERROR";
 const char btResponseFail[] = "FAIL";
+const char obdNoData[] = "NO DATA";
 
 char cmdFull[30] = {0};
 char command[30] = {0}; byte cmdIndex = 0;
 char response[30] = {0}; byte responseIndex = 0;
+
+int commandCount = 0;
 
 int timer = 0;
 
@@ -92,171 +95,206 @@ void setup() {
   strcat(cmdFull, cmdPids);
   strcat(cmdFull, newLine);
   SendToBluetooth(cmdFull, sizeof(cmdPids) + sizeof(newLine), SHOW_OUTPUT);
-  
-  timer = millis();
 }
 
 void loop() {
   // put your main code here, to run repeatedly:
 
-  // We're not interested in what's coming from the main UART bus, so no need to check that
-  // We will check for any responses before sending anything over.
-  if(mySerial.available() > 0)
+  timer = millis();
+
+  // We are only sending 3 commands
+  while(commandCount < 3)
   {
-    while(mySerial.available())
+    // We're not interested in what's coming from the main UART bus, so no need to check that
+    // We will check for any responses before sending anything over.
+    if(mySerial.available() > 0)
     {
-      char charByte = mySerial.read();
-      response[responseIndex] = charByte;
-      if(response[responseIndex] == '>') // '>' marks end of response of OBD
+      while(mySerial.available())
       {
-        //WriteToTerminal(response);
-        responseReceived = true;
-      }
-      responseIndex++;
-      
-      Serial.write(charByte);
-    }
-  }
-
-  // Determine the response from the OBDII device when the full message has been received
-  if(responseReceived)
-  {
-    nextCommandReady = true;
-    
-    byte numberOfCmdsReceived = responseIndex / 3; 
-    byte receivedCommands[numberOfCmdsReceived] = {0};
-    int commandIndex = 0;
-
-    Serial.print(F("Cmds: ")); Serial.print(numberOfCmdsReceived); Serial.print(" ");
-    // Convert the response from the OBD to actual numbers (instead of a string)
-    for(int i = 0; i < responseIndex; i++)
-    {
-//      if(/*response[i] == '>' || */response[i] == '\0')
-//        break;
-      
-      if(IsCharHexDigit(response[i]))
-      {
-        byte value = receivedCommands[commandIndex];
-        byte addition = response[i];
-        if(response[i] >= '0' && response[i] <= '9')
-          addition -= 48;
-        else if(response[i] >= 'A' && response[i] <= 'F')
-          addition -= 55;
-          
-        receivedCommands[commandIndex] = (value << 4) + addition;
-      }
-      else
-      {
-        //Serial.print(F("Char: ")); Serial.println(receivedCommands[commandIndex], HEX);
-        commandIndex++;
-      }
-    }
-
-    responseReceived = false;
-
-    // The response is no longer necessary, so can be emptied.
-    memset(response, 0, sizeof(response));
-    responseIndex = 0;
-
-    // Get the value from the response
-
-    // Example command: 01 00
-    // Example response: 41 00 BE 1F B8 10
-    // 41 - Reponse for mode 01 (0x40 + 0x01)
-    // 00 - Repeat of the PID number requested
-    // Rest - data bytes
-
-    // Example command: 01 0C  [request RPM]
-    // Example response: 41 0C 1A F8
-    // 41 - Response for mode 01
-    // 0C - Response for RPM
-    // 1A F8 - value 6904. Actual RPM: 6904 / 4 = 1726
-    
-    bool startByteReceived = false;
-    bool pidByteReceived = false;
-    byte pidReceived = 0;
-    uint32_t responseData = 0;
-    Serial.print(F("Char:")); 
-    for(int i = 0; i < numberOfCmdsReceived; i++)
-    {
-      Serial.print(F(" ")); Serial.print(receivedCommands[i], HEX);
-      if(receivedCommands[i] == 0x41 && !startByteReceived)
-      {
-        startByteReceived = true;
-        pidByteReceived = false;
-      }
-      else if(startByteReceived && !pidByteReceived)
-      {
-        pidReceived = receivedCommands[i];
-        switch(pidReceived)
+        char charByte = mySerial.read();
+        response[responseIndex] = charByte;
+        if(response[responseIndex] == '>') // '>' marks end of response of OBD
         {
-          case PIDS_AVAIL: // 4 bytes return
-            responseData = (responseData << 8) + receivedCommands[++i];
-            Serial.print(F(" ")); Serial.print(receivedCommands[i], HEX);
-            responseData = (responseData << 8) + receivedCommands[++i];
-            Serial.print(F(" ")); Serial.print(receivedCommands[i], HEX);
-          case ENGINE_RPM: // 2 bytes return
-            responseData = (responseData << 8) + receivedCommands[++i];
-            Serial.print(F(" ")); Serial.print(receivedCommands[i], HEX);
-          case VEHICLE_SPEED: // 1 byte return
-          case ACCEL_POS: // 1 byte return
-            responseData = (responseData << 8) + receivedCommands[++i];
-            Serial.print(F(" ")); Serial.print(receivedCommands[i], HEX);
-            break;
-          default:
-            responseData = -1;
-            break;
+          responseReceived = true;
         }
-
-        //Serial.print(F("Resp: ")); Serial.println(responseData);
+        responseIndex++;
         
-        switch(pidReceived)
-        {
-          case PIDS_AVAIL:
-            currentReading.PIDs = responseData;
-            break;
-          case ENGINE_RPM:
-            currentReading.RPM = ((uint16_t)responseData) / 4;
-            break;
-          case VEHICLE_SPEED:
-            currentReading.Speed = (uint8_t)responseData;
-            break;
-          case ACCEL_POS:
-            currentReading.Throttle = (uint8_t)responseData;
-            break;
-          default:
-            break;
-        }
-
-        startByteReceived = false;
-        pidByteReceived = false;
+        Serial.write(charByte);
       }
     }
+  
+    // Determine the response from the OBDII device when the full message has been received
+    if(responseReceived)
+    {
+      nextCommandReady = true;
 
-    Serial.print(F("\tRPM: ")); Serial.print(currentReading.RPM);
-    Serial.print(F("\tSpeed (kph): ")); Serial.print(currentReading.Speed);
-    Serial.print(F("\tThrottle (%): ")); Serial.print(currentReading.Throttle);
-    Serial.println();
-  }
+      // Check if the data return is valid. A response of "NO DATA" means that there is no data
+      // and the car cannot provide the value requested.
+      if(StringContains(response, obdNoData))
+      {
+        continue;
+      }
+  
+      // Each response we get is comprised of a series of 3 bytes:
+      // 1. upper nibble
+      // 2. lower nibble
+      // 3. space character OR command terminator ('>')
+      // Ergo, the number of command bytes received is the response index
+      // divided by 3.
+      byte numberOfCmdsReceived = responseIndex / 3; 
+      byte receivedCommands[numberOfCmdsReceived] = {0};
+      int commandIndex = 0;
+  
+      // Uncomment the following line to see the command bytes!
+      //Serial.print(F("Cmds: ")); Serial.print(numberOfCmdsReceived); Serial.print(" ");
+      
+      // Convert the response from the OBD to actual numbers (instead of a char array)
+      for(int i = 0; i < responseIndex; i++)
+      {
+        if(IsCharHexDigit(response[i]))
+        {
+          byte value = receivedCommands[commandIndex];
+          byte addition = response[i];
+          if(response[i] >= '0' && response[i] <= '9')
+            addition -= 48;
+          else if(response[i] >= 'A' && response[i] <= 'F')
+            addition -= 55;
+            
+          receivedCommands[commandIndex] = (value << 4) + addition;
+        }
+        else
+        {
+          commandIndex++;
+        }
+      }
+  
+      responseReceived = false;
+  
+      // The response is no longer necessary, so can be emptied.
+      memset(response, 0, sizeof(response));
+      responseIndex = 0;
+  
+      // Get the value from the response
+  
+      // Example command: 01 00
+      // Example response: 41 00 BE 1F B8 10
+      // 41 - Reponse for mode 01 (0x40 + 0x01)
+      // 00 - Repeat of the PID number requested
+      // Rest - data bytes
+  
+      // Example command: 01 0C  [request RPM]
+      // Example response: 41 0C 1A F8
+      // 41 - Response for mode 01
+      // 0C - Response for RPM
+      // 1A F8 - value 6904. Actual RPM: 6904 / 4 = 1726
+      
+      bool startByteReceived = false;
+      bool pidByteReceived = false;
+      byte pidReceived = 0;
+      uint32_t responseData = 0;
+      Serial.print(F("Char:")); 
+      for(int i = 0; i < numberOfCmdsReceived; i++)
+      {
+        // Uncomment the following line to see the commands received in byte format!
+        //Serial.print(F(" ")); Serial.print(receivedCommands[i], HEX);
+        
+        if(receivedCommands[i] == 0x41 && !startByteReceived)
+        {
+          startByteReceived = true;
+          pidByteReceived = false;
+        }
+        else if(startByteReceived && !pidByteReceived)
+        {
+          pidReceived = receivedCommands[i];
+          switch(pidReceived)
+          {
+            case PIDS_AVAIL: // 4 bytes return
+              responseData = (responseData << 8) + receivedCommands[++i];
+              //Serial.print(F(" ")); Serial.print(receivedCommands[i], HEX);
+              responseData = (responseData << 8) + receivedCommands[++i];
+              //Serial.print(F(" ")); Serial.print(receivedCommands[i], HEX);
+            case ENGINE_RPM: // 2 bytes return
+              responseData = (responseData << 8) + receivedCommands[++i];
+              //Serial.print(F(" ")); Serial.print(receivedCommands[i], HEX);
+            case VEHICLE_SPEED: // 1 byte return
+            case ACCEL_POS: // 1 byte return
+              responseData = (responseData << 8) + receivedCommands[++i];
+              //Serial.print(F(" ")); Serial.print(receivedCommands[i], HEX);
+              break;
+            default:
+              responseData = -1;
+              break;
+          }
+  
+          //Serial.print(F("Resp: ")); Serial.println(responseData);
+          
+          switch(pidReceived)
+          {
+            case PIDS_AVAIL:
+              currentReading.PIDs = responseData;
+              break;
+            case ENGINE_RPM:
+              currentReading.RPM = ((uint16_t)responseData) / 4;
+              break;
+            case VEHICLE_SPEED:
+              currentReading.Speed = (uint8_t)responseData;
+              break;
+            case ACCEL_POS:
+              currentReading.Throttle = (uint8_t)responseData;
+              break;
+            default:
+              break;
+          }
+  
+          startByteReceived = false;
+          pidByteReceived = false;
+        }
+      }
 
-  // Send the next command if the device is ready
-  if(nextCommandReady)
-  {
-    memset(cmdFull, 0, sizeof(cmdFull));
-    strcat(cmdFull, cmdRpm);
-    strcat(cmdFull, newLine);
-    SendToBluetooth(cmdFull, sizeof(cmdRpm) + sizeof(newLine) - 2, SHOW_OUTPUT);
-    
-    memset(cmdFull, 0, sizeof(cmdFull));
-    strcat(cmdFull, cmdSpeed);
-    strcat(cmdFull, newLine);
-    SendToBluetooth(cmdFull, sizeof(cmdSpeed) + sizeof(newLine) - 2, SHOW_OUTPUT);
-    
-    memset(cmdFull, 0, sizeof(cmdFull));
-    strcat(cmdFull, cmdThrottle);
-    strcat(cmdFull, newLine);
-    SendToBluetooth(cmdFull, sizeof(cmdThrottle) + sizeof(newLine) - 2, SHOW_OUTPUT);
+      switch(commandCount)
+      {
+        case 0:
+          Serial.print(F("\tRPM: ")); Serial.print(currentReading.RPM);
+          break;
+        case 1:
+          Serial.print(F("\tSpeed (kph): ")); Serial.print(currentReading.Speed);
+          break;
+        case 2:
+          Serial.print(F("\tThrottle (%): ")); Serial.print(currentReading.Throttle);
+        default:
+          Serial.println();
+          break;
+      }
+    }
+  
+    // Send the next command if the device is ready
+    if(nextCommandReady)
+    {
+      switch(commandCount)
+      {
+        case 0:
+          memset(cmdFull, 0, sizeof(cmdFull));
+          strcat(cmdFull, cmdRpm);
+          strcat(cmdFull, newLine);
+          SendToBluetooth(cmdFull, sizeof(cmdRpm) + sizeof(newLine) - 2, SHOW_OUTPUT);
+          break;
+        case 1:
+          memset(cmdFull, 0, sizeof(cmdFull));
+          strcat(cmdFull, cmdSpeed);
+          strcat(cmdFull, newLine);
+          SendToBluetooth(cmdFull, sizeof(cmdSpeed) + sizeof(newLine) - 2, SHOW_OUTPUT);
+          break;
+        case 2:
+          memset(cmdFull, 0, sizeof(cmdFull));
+          strcat(cmdFull, cmdThrottle);
+          strcat(cmdFull, newLine);
+          SendToBluetooth(cmdFull, sizeof(cmdThrottle) + sizeof(newLine) - 2, SHOW_OUTPUT);
+          break;
+      }
+      commandCount++;
+    }
   }
+  commandCount = 0;
 
   // Wait until the next turn
   while(millis() - timer < DELAY);
@@ -301,11 +339,12 @@ bool ConnectToObdDevice()
 
   // Pair with it
   memset(cmdFull, 0, sizeof(cmdFull));
+  strcat(cmdFull, cmdCheck);
   strcat(cmdFull, cmdPair);
   strcat(cmdFull, obdMacAddress);
   strcat(cmdFull, cmdPairTimeout);
   strcat(cmdFull, newLine);
-  SendToBluetooth(cmdFull, sizeof(cmdPair) + sizeof(obdMacAddress) + sizeof(cmdPairTimeout) + sizeof(newLine) - 4, SHOW_OUTPUT);
+  SendToBluetooth(cmdFull, sizeof(cmdCheck) + sizeof(cmdPair) + sizeof(obdMacAddress) + sizeof(cmdPairTimeout) + sizeof(newLine) - 5, SHOW_OUTPUT);
   //WaitForResponse(true, SHOW_OUTPUT); delay(1000)
   deviceResponseOk = WaitForResponse(true, SHOW_OUTPUT);
   
@@ -320,10 +359,11 @@ bool ConnectToObdDevice()
 
   // Check it is in the paring list
   memset(cmdFull, 0, sizeof(cmdFull));
+  strcat(cmdFull, cmdCheck);
   strcat(cmdFull, cmdPairCheck);
   strcat(cmdFull, obdMacAddress);
   strcat(cmdFull, newLine);
-  SendToBluetooth(cmdFull, sizeof(cmdPairCheck) + sizeof(obdMacAddress) + sizeof(newLine) - 3, SHOW_OUTPUT);
+  SendToBluetooth(cmdFull, sizeof(cmdCheck) + sizeof(cmdPairCheck) + sizeof(obdMacAddress) + sizeof(newLine) - 4, SHOW_OUTPUT);
   deviceResponseOk = WaitForResponse(true, SHOW_OUTPUT);
   
   if(!deviceResponseOk) 
@@ -337,10 +377,11 @@ bool ConnectToObdDevice()
 
   // Connect to it.
   memset(cmdFull, 0, sizeof(cmdFull));
+  strcat(cmdFull, cmdCheck);
   strcat(cmdFull, cmdConnect);
   strcat(cmdFull, obdMacAddress);
   strcat(cmdFull, newLine);
-  SendToBluetooth(cmdFull, sizeof(cmdConnect) + sizeof(obdMacAddress) + sizeof(newLine) - 3, SHOW_OUTPUT);
+  SendToBluetooth(cmdFull, sizeof(cmdCheck) + sizeof(cmdConnect) + sizeof(obdMacAddress) + sizeof(newLine) - 4, SHOW_OUTPUT);
   deviceResponseOk = WaitForResponse(true, SHOW_OUTPUT);
   
   if(!deviceResponseOk) 
@@ -406,28 +447,6 @@ void SendToBluetooth(const char *pCommand, const int commandLength, bool printCo
   }
 }
 
-bool IsCharHexDigit(char character)
-{
-  if((character >= '0' && character <= '9') ||
-     (character >= 'A' && character <= 'F') ||
-     (character >= 'a' && character <= 'f'))
-    return true;
-  else
-    return false;
-}
-
-byte HexCharToDigit(char character)
-{
-  if(character >= '0' && character <= '9')
-    return character - '0';
-  else if(character >= 'A' && character <= 'F')
-    return character - 'A' + 10;
-  else if(character >= 'a' && character <= 'f')
-    return character = 'a' + 10;
-  else
-    return 0;
-}
-
 void CheckReceiverBuffer(bool showResponse)
 {
   if(mySerial.available() > 0)
@@ -487,7 +506,4 @@ bool WaitForResponse(bool clearResponse, bool showResponse)
   else return false;
 }
 
-bool StringContains(char* charArray, char* subString)
-{
-  return strstr(charArray, subString) > 0;
-}
+
