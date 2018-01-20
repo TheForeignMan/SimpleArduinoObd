@@ -9,7 +9,7 @@
 #define BT_RX 4
 #define BT_TX 3
 #define SHOW_OUTPUT false
-#define DELAY 5000 // delay between commands in milliseconds
+#define DELAY 500 // delay between commands in milliseconds
 
 #define MODE_01 0x0100
 #define PIDS_AVAIL 0x00
@@ -27,6 +27,11 @@ struct Reading
   uint8_t Speed;
   uint8_t Throttle;
 } currentReading;
+
+uint32_t* pPid;
+uint16_t* pRpm;
+uint8_t* pSpeed;
+uint8_t* pThrottle;
 
 bool nextCommandReady = false;
 bool responseReceived = false;
@@ -55,7 +60,7 @@ char response[30] = {0}; byte responseIndex = 0;
 
 int commandCount = 0;
 
-int timer = 0;
+unsigned long timer = 0;
 
 void setup() {
   // put your setup code here, to run once:
@@ -68,6 +73,11 @@ void setup() {
   currentReading.RPM = 0;
   currentReading.Speed = 0;
   currentReading.Throttle = 0;
+
+  pPid = &currentReading.PIDs;
+  pRpm = &currentReading.RPM;
+  pSpeed = &currentReading.Speed;
+  pThrottle = &currentReading.Throttle;
   
   Serial.begin(115200);
   mySerial.begin(38400);
@@ -119,7 +129,7 @@ void loop() {
         }
         responseIndex++;
         
-        Serial.write(charByte);
+        //Serial.write(charByte);
       }
     }
   
@@ -129,7 +139,7 @@ void loop() {
       nextCommandReady = true;
 
       // Check if the data return is valid. A response of "NO DATA" means that there is no data
-      // and the car cannot provide the value requested.
+      // and the car cannot provide the value requested. Ergo, don't check for values, and move on.
       if(StringContains(response, obdNoData))
       {
         continue;
@@ -192,7 +202,7 @@ void loop() {
       bool pidByteReceived = false;
       byte pidReceived = 0;
       uint32_t responseData = 0;
-      Serial.print(F("Char:")); 
+      //Serial.print(F("Char:")); 
       for(int i = 0; i < numberOfCmdsReceived; i++)
       {
         // Uncomment the following line to see the commands received in byte format!
@@ -225,22 +235,24 @@ void loop() {
               responseData = -1;
               break;
           }
-  
-          //Serial.print(F("Resp: ")); Serial.println(responseData);
           
           switch(pidReceived)
           {
             case PIDS_AVAIL:
-              currentReading.PIDs = responseData;
+              //currentReading.PIDs = responseData;
+              *pPid = responseData;
               break;
             case ENGINE_RPM:
-              currentReading.RPM = ((uint16_t)responseData) / 4;
+              //currentReading.RPM = ((uint16_t)responseData) / 4;
+              *pRpm = ((uint16_t)responseData) / 4;
               break;
             case VEHICLE_SPEED:
-              currentReading.Speed = (uint8_t)responseData;
+              //currentReading.Speed = (uint8_t)responseData;
+              *pSpeed = (uint8_t)responseData;
               break;
             case ACCEL_POS:
-              currentReading.Throttle = (uint8_t)responseData;
+              //currentReading.Throttle = (uint8_t)responseData;
+              *pThrottle = (uint8_t)responseData;
               break;
             default:
               break;
@@ -254,14 +266,18 @@ void loop() {
       switch(commandCount)
       {
         case 0:
-          Serial.print(F("\tRPM: ")); Serial.print(currentReading.RPM);
+          Serial.print(F("\tRPM: ")); Serial.print(*pRpm);
           break;
         case 1:
-          Serial.print(F("\tSpeed (kph): ")); Serial.print(currentReading.Speed);
+          Serial.print(F("\tSpeed (kph): ")); Serial.print(*pSpeed);
           break;
         case 2:
-          Serial.print(F("\tThrottle (%): ")); Serial.print(currentReading.Throttle);
+          Serial.print(F("\tThrottle (%): ")); Serial.print(*pThrottle);
         default:
+//          Serial.print(" ");
+//          Serial.print(millis()); Serial.print(" ");
+//          Serial.print(timer); Serial.print(" ");
+//          Serial.print(millis() - timer);
           Serial.println();
           break;
       }
