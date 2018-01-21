@@ -58,6 +58,17 @@ char cmdFull[30] = {0};
 char command[30] = {0}; byte cmdIndex = 0;
 char response[30] = {0}; byte responseIndex = 0;
 
+byte numberOfCmdsReceived = 0;
+byte receivedCommands[8] = {0};
+
+byte value = 0;
+byte addition = 0;
+
+bool startByteReceived = false;
+bool pidByteReceived = false;
+byte pidReceived = 0;
+uint32_t responseData = 0;
+
 int commandCount = 0;
 
 unsigned long timer = 0;
@@ -83,7 +94,6 @@ void setup() {
   mySerial.begin(38400);
   delay(100);
   Bluetooth(HIGH);
-  delay(1000);
   nextCommandReady = true;
 
   while(mySerial.available() > 0)
@@ -121,8 +131,7 @@ void loop() {
     {
       while(mySerial.available())
       {
-        char charByte = mySerial.read();
-        response[responseIndex] = charByte;
+        response[responseIndex] = mySerial.read();
         if(response[responseIndex] == '>') // '>' marks end of response of OBD
         {
           responseReceived = true;
@@ -151,26 +160,28 @@ void loop() {
       // 3. space character OR command terminator ('>')
       // Ergo, the number of command bytes received is the response index
       // divided by 3.
-      byte numberOfCmdsReceived = responseIndex / 3; 
-      byte receivedCommands[numberOfCmdsReceived] = {0};
+      numberOfCmdsReceived = responseIndex / 3; 
+      memset(receivedCommands, 0, sizeof(receivedCommands));
       int commandIndex = 0;
   
       // Uncomment the following line to see the command bytes!
       //Serial.print(F("Cmds: ")); Serial.print(numberOfCmdsReceived); Serial.print(" ");
-      
+
+      value = 0; byte* pValue;
+      addition = 0; byte* pAddition;
       // Convert the response from the OBD to actual numbers (instead of a char array)
       for(int i = 0; i < responseIndex; i++)
       {
         if(IsCharHexDigit(response[i]))
         {
-          byte value = receivedCommands[commandIndex];
-          byte addition = response[i];
+          pValue = &receivedCommands[commandIndex];
+          pAddition = &response[i];
           if(response[i] >= '0' && response[i] <= '9')
-            addition -= 48;
+            *pAddition -= 48;
           else if(response[i] >= 'A' && response[i] <= 'F')
-            addition -= 55;
+            *pAddition -= 55;
             
-          receivedCommands[commandIndex] = (value << 4) + addition;
+          receivedCommands[commandIndex] = (*pValue << 4) + *pAddition;
         }
         else
         {
@@ -198,10 +209,10 @@ void loop() {
       // 0C - Response for RPM
       // 1A F8 - value 6904. Actual RPM: 6904 / 4 = 1726
       
-      bool startByteReceived = false;
-      bool pidByteReceived = false;
-      byte pidReceived = 0;
-      uint32_t responseData = 0;
+      startByteReceived = false;
+      pidByteReceived = false;
+      pidReceived = 0;
+      responseData = 0;
       //Serial.print(F("Char:")); 
       for(int i = 0; i < numberOfCmdsReceived; i++)
       {
@@ -274,10 +285,18 @@ void loop() {
         case 2:
           Serial.print(F("\tThrottle (%): ")); Serial.print(*pThrottle);
         default:
-//          Serial.print(" ");
+          Serial.print(" ");
+          // Check time between OBD requests
 //          Serial.print(millis()); Serial.print(" ");
 //          Serial.print(timer); Serial.print(" ");
 //          Serial.print(millis() - timer);
+
+          // Check available SRAM in the Arduino
+//          extern int __heap_start, *__brkval;
+//          int v;
+//          int ret = (int)&v - (__brkval == 0 ? (int) &__heap_start : (int) __brkval);
+//          Serial.print(ret);
+          
           Serial.println();
           break;
       }
@@ -416,12 +435,12 @@ void Bluetooth(bool enable)
   digitalWrite(BT_KEY, enable);
   delay(100);
   digitalWrite(BT_PWR, enable);
-  delay(1000);
   Serial.print(F("Bluetooth "));
   if(enable)
     Serial.println(F("enabled"));
   else
     Serial.println(F("disabled"));
+  delay(1000);
 }
 
 void SendToBluetooth(const char *pCommand, const int commandLength, bool printCommand)
