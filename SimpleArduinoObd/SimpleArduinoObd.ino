@@ -2,14 +2,19 @@
 // Check for connection
 // Start getting data
 
+#include <SD.h>
 #include <SoftwareSerial.h>
+#include <SPI.h>
+
+#define GRAPH_MODE 0
+#define ENABLE_SD_LOG 1
 
 #define BT_PWR 5
 #define BT_KEY 2
 #define BT_RX 4
 #define BT_TX 3
 #define SHOW_OUTPUT false
-#define DELAY 500 // delay between commands in milliseconds
+#define DELAY 1000 // delay between commands in milliseconds
 
 #define MODE_01 0x0100
 #define PIDS_AVAIL 0x00
@@ -17,7 +22,7 @@
 #define VEHICLE_SPEED 0x0D
 #define ACCEL_POS 0x11
 
-
+File myFile;
 SoftwareSerial mySerial(BT_RX, BT_TX); // RX , TX
 
 struct Reading
@@ -35,6 +40,7 @@ uint8_t* pThrottle;
 
 bool nextCommandReady = false;
 bool responseReceived = false;
+static bool sendToGraph = false;
 
 // CHANGE THIS MAC ADDRESS TO OBDII BT MAC ADDRESS
 const char obdMacAddress[] = "1D,A5,68988B";
@@ -54,15 +60,19 @@ const char btResponseError[] = "ERROR";
 const char btResponseFail[] = "FAIL";
 const char obdNoData[] = "NO DATA";
 
-char cmdFull[30] = {0};
-char command[30] = {0}; byte cmdIndex = 0;
-char response[30] = {0}; byte responseIndex = 0;
+const byte arraySize = 30;
+char cmdFull[arraySize] = {0};
+char command[arraySize] = {0}; byte cmdIndex = 0;
+char response[arraySize] = {0}; byte responseIndex = 0;
+char mainResponse[arraySize] = {0}; byte mainResponseIndex = 0;
 
 byte numberOfCmdsReceived = 0;
 byte receivedCommands[8] = {0};
 
 byte value = 0;
 byte addition = 0;
+byte* pValue = &value;
+byte* pAddition = &addition;
 
 bool startByteReceived = false;
 bool pidByteReceived = false;
@@ -101,14 +111,22 @@ void setup() {
     mySerial.read();
   }
 
+  if(!SD.begin(10))
+  {
+    SerialPrint(F("Initialisation failed."));
+    while(1);
+  }
+
   if(!ConnectToObdDevice())
   {
-    Serial.println(F("Failed to connect to OBDII module"));
+    SerialPrint(F("Failed to connect to OBDII module\r\n"));
     while(1);
   }
 
   // Done talking to BT module, no need to be in AT mode anymore
   digitalWrite(BT_KEY, LOW);
+  
+  Serial.print("O");
 
   delay(100);
   memset(cmdFull, 0, sizeof(cmdFull));
@@ -122,7 +140,25 @@ void loop() {
 
   timer = millis();
 
-  // We are only sending 3 commands
+  // Check the main serial port for any commands.
+  if(Serial.available() > 0)
+  {
+    while(Serial.available() > 0)
+    {
+      mainResponse[mainResponseIndex] = Serial.read();
+
+      // Check for command to send data to PC graph program
+      if((mainResponse[mainResponseIndex] == 'g') || (mainResponse[mainResponseIndex] == 'G'))
+      {
+        sendToGraph = !sendToGraph;
+        memset(mainResponse, 0, sizeof(mainResponse));
+        mainResponseIndex = 0;
+        Serial.println(sendToGraph ? 1 : 0);
+      }
+    }
+  }
+
+  // We are only sending 3 commands - speed, RPM, throttle
   while(commandCount < 3)
   {
     // We're not interested in what's coming from the main UART bus, so no need to check that
@@ -132,13 +168,17 @@ void loop() {
       while(mySerial.available())
       {
         response[responseIndex] = mySerial.read();
-        if(response[responseIndex] == '>') // '>' marks end of response of OBD
+        //Serial.print(response[responseIndex]); // sends received response to uart
+        // '>' marks end of response of OBD
+        if(response[responseIndex] == '>') 
         {
           responseReceived = true;
         }
         responseIndex++;
-        
-        //Serial.write(charByte);
+        if(responseIndex >= arraySize)
+        {
+          responseIndex = arraySize - 1;
+        }
       }
     }
   
@@ -151,6 +191,9 @@ void loop() {
       // and the car cannot provide the value requested. Ergo, don't check for values, and move on.
       if(StringContains(response, obdNoData))
       {
+        responseReceived = false;
+        memset(response, 0, arraySize);
+        responseIndex = 0;
         continue;
       }
   
@@ -160,32 +203,32 @@ void loop() {
       // 3. space character OR command terminator ('>')
       // Ergo, the number of command bytes received is the response index
       // divided by 3.
-      numberOfCmdsReceived = responseIndex / 3; 
+      numberOfCmdsReceived = (responseIndex - 4) / 3; 
       memset(receivedCommands, 0, sizeof(receivedCommands));
       int commandIndex = 0;
-  
-      // Uncomment the following line to see the command bytes!
-      //Serial.print(F("Cmds: ")); Serial.print(numberOfCmdsReceived); Serial.print(" ");
-
-      value = 0; byte* pValue;
-      addition = 0; byte* pAddition;
+      *pValue = 0; 
+      *pAddition = 0;
       // Convert the response from the OBD to actual numbers (instead of a char array)
-      for(int i = 0; i < responseIndex; i++)
+      for(int i = 4; i < responseIndex; i++)
       {
+        // Only get the numbers if they are part of a hex digit. If it is not a hex digit,
+        // the command has been completed, so move on to the next character.
         if(IsCharHexDigit(response[i]))
         {
-          pValue = &receivedCommands[commandIndex];
-          pAddition = &response[i];
+          *pValue = receivedCommands[commandIndex]; // first time round, this is 0. Second is upper nibble.
+          *pAddition = response[i];
           if(response[i] >= '0' && response[i] <= '9')
             *pAddition -= 48;
           else if(response[i] >= 'A' && response[i] <= 'F')
             *pAddition -= 55;
-            
+          
           receivedCommands[commandIndex] = (*pValue << 4) + *pAddition;
         }
         else
         {
           commandIndex++;
+          *pValue = 0; 
+          *pAddition = 0;
         }
       }
   
@@ -196,7 +239,7 @@ void loop() {
       responseIndex = 0;
   
       // Get the value from the response
-  
+      
       // Example command: 01 00
       // Example response: 41 00 BE 1F B8 10
       // 41 - Reponse for mode 01 (0x40 + 0x01)
@@ -213,12 +256,8 @@ void loop() {
       pidByteReceived = false;
       pidReceived = 0;
       responseData = 0;
-      //Serial.print(F("Char:")); 
-      for(int i = 0; i < numberOfCmdsReceived; i++)
-      {
-        // Uncomment the following line to see the commands received in byte format!
-        //Serial.print(F(" ")); Serial.print(receivedCommands[i], HEX);
-        
+      for(int i = 1; i < numberOfCmdsReceived; i++)
+      { 
         if(receivedCommands[i] == 0x41 && !startByteReceived)
         {
           startByteReceived = true;
@@ -231,16 +270,12 @@ void loop() {
           {
             case PIDS_AVAIL: // 4 bytes return
               responseData = (responseData << 8) + receivedCommands[++i];
-              //Serial.print(F(" ")); Serial.print(receivedCommands[i], HEX);
               responseData = (responseData << 8) + receivedCommands[++i];
-              //Serial.print(F(" ")); Serial.print(receivedCommands[i], HEX);
             case ENGINE_RPM: // 2 bytes return
               responseData = (responseData << 8) + receivedCommands[++i];
-              //Serial.print(F(" ")); Serial.print(receivedCommands[i], HEX);
             case VEHICLE_SPEED: // 1 byte return
             case ACCEL_POS: // 1 byte return
               responseData = (responseData << 8) + receivedCommands[++i];
-              //Serial.print(F(" ")); Serial.print(receivedCommands[i], HEX);
               break;
             default:
               responseData = -1;
@@ -250,19 +285,15 @@ void loop() {
           switch(pidReceived)
           {
             case PIDS_AVAIL:
-              //currentReading.PIDs = responseData;
               *pPid = responseData;
               break;
             case ENGINE_RPM:
-              //currentReading.RPM = ((uint16_t)responseData) / 4;
               *pRpm = ((uint16_t)responseData) / 4;
               break;
             case VEHICLE_SPEED:
-              //currentReading.Speed = (uint8_t)responseData;
               *pSpeed = (uint8_t)responseData;
               break;
             case ACCEL_POS:
-              //currentReading.Throttle = (uint8_t)responseData;
               *pThrottle = (uint8_t)responseData;
               break;
             default:
@@ -274,32 +305,67 @@ void loop() {
         }
       }
 
-      switch(commandCount)
+#if GRAPH_MODE
+      if(commandCount > 1)
       {
-        case 0:
-          Serial.print(F("\tRPM: ")); Serial.print(*pRpm);
-          break;
-        case 1:
-          Serial.print(F("\tSpeed (kph): ")); Serial.print(*pSpeed);
-          break;
-        case 2:
-          Serial.print(F("\tThrottle (%): ")); Serial.print(*pThrottle);
-        default:
-          Serial.print(" ");
-          // Check time between OBD requests
-//          Serial.print(millis()); Serial.print(" ");
-//          Serial.print(timer); Serial.print(" ");
-//          Serial.print(millis() - timer);
-
-          // Check available SRAM in the Arduino
-//          extern int __heap_start, *__brkval;
-//          int v;
-//          int ret = (int)&v - (__brkval == 0 ? (int) &__heap_start : (int) __brkval);
-//          Serial.print(ret);
-          
-          Serial.println();
-          break;
+        Serial.print("S");
+        Serial.print(*pRpm);
+        Serial.print(",");
+        Serial.print(*pSpeed);
+        Serial.print(",");
+        Serial.print(*pThrottle);
+        Serial.print("E");
       }
+#elif ENABLE_SD_LOG
+      if(commandCount > 1)
+      {
+        
+      }
+#else
+      if(sendToGraph)
+      {
+        if(commandCount > 1)
+        {
+          Serial.print("S");
+          Serial.print(*pRpm);
+          Serial.print(",");
+          Serial.print(*pSpeed);
+          Serial.print(",");
+          Serial.print(*pThrottle);
+          Serial.print("E");
+        }
+      }
+      else
+      {
+        switch(commandCount)
+        {
+          case 0:
+            Serial.print(F("\tRPM: ")); Serial.print(*pRpm);
+  //          WriteToFile(
+            break;
+          case 1:
+            Serial.print(F("\tSpeed (kph): ")); Serial.print(*pSpeed);
+            break;
+          case 2:
+            Serial.print(F("\tThrottle (%): ")); Serial.print(*pThrottle);
+          default:
+            Serial.print(" ");
+            // Check time between OBD requests
+  //          Serial.print(millis()); Serial.print(" ");
+  //          Serial.print(timer); Serial.print(" ");
+  //          Serial.print(millis() - timer);
+  
+            // Check available SRAM in the Arduino
+  //          extern int __heap_start, *__brkval;
+  //          int v;
+  //          int ret = (int)&v - (__brkval == 0 ? (int) &__heap_start : (int) __brkval);
+  //          Serial.print(ret);
+            
+            Serial.println();
+            break;
+        }
+      }
+#endif
     }
   
     // Send the next command if the device is ready
@@ -435,11 +501,13 @@ void Bluetooth(bool enable)
   digitalWrite(BT_KEY, enable);
   delay(100);
   digitalWrite(BT_PWR, enable);
+#if SHOW_OUTPUT
   Serial.print(F("Bluetooth "));
   if(enable)
     Serial.println(F("enabled"));
   else
     Serial.println(F("disabled"));
+#endif
   delay(1000);
 }
 
@@ -501,8 +569,10 @@ void CheckReceiverBuffer(bool showResponse)
         responseReceived = true;
       }
       responseIndex++;
-      //Serial.print("Char received: ");
-      //Serial.println();
+      if(responseIndex >= arraySize)
+      {
+        responseIndex = arraySize - 1;
+      }
     }
   }
 }
@@ -539,6 +609,64 @@ bool WaitForResponse(bool clearResponse, bool showResponse)
 
   if(responseValid) return true;
   else return false;
+}
+
+
+void SerialPrint(const __FlashStringHelper *ifsh)
+{
+  PGM_P p = reinterpret_cast<PGM_P>(ifsh);
+  size_t n = 0;
+  while (1) {
+    unsigned char c = pgm_read_byte(p++);
+    if (c == 0) break;
+    if (Serial.write(c)) n++;
+    else break;
+  }
+}
+
+void SerialPrint(char* text, int textLength)
+{
+#if SHOW_OUTPUT
+  for(int i = 0; i < textLength; i++)
+  {
+    if(*(text+i) == '\0')
+      break;
+      
+    Serial.print(*(text+i));
+  }
+#endif
+}
+
+static int lineCounter = 0;
+static byte fileCounter = 0;
+static char fileText[] = "OBD_File_XX.txt";
+void WriteToFile(char* text, int textLength)
+{
+  // No need to constantly rename to the char array every 
+  // time text is written to the file. Only do it when the
+  // line counter is reset.
+  if(lineCounter == 0)
+  {
+    fileText[9] = (fileCounter / 10) + 48;
+    fileText[10] = (fileCounter % 10) + 48;
+  }
+  
+  myFile = SD.open(fileText, FILE_WRITE);
+  if(myFile)
+  {
+    for(int i = 0; i < textLength; i++)
+      myFile.print(*(text+i));
+
+    myFile.close();
+    lineCounter++;
+  }
+
+  // 1200 lines at 1s per line equates to 20mins-worth of data per file
+  if(lineCounter > 1200)
+  {
+    lineCounter = 0;
+    fileCounter++;
+  }
 }
 
 
