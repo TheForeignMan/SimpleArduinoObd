@@ -27,11 +27,11 @@ SoftwareSerial mySerial(BT_RX, BT_TX); // RX , TX
 
 struct Reading
 {
-  uint32_t PIDs;
-  uint16_t RPM;
-  uint8_t Speed;
-  uint8_t Throttle;
-} currentReading;
+  uint32_t PIDs;    // 4 bytes
+  uint16_t RPM;     // 2 bytes
+  uint8_t Speed;    // 1 byte
+  uint8_t Throttle; // 1 byte
+} currentReading;   // Total size of struct = 8 bytes (same size as double)
 
 uint32_t* pPid;
 uint16_t* pRpm;
