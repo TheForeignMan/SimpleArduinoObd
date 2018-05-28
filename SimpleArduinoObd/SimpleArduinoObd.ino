@@ -4,14 +4,11 @@
 #define DEBUG 1
 
 #include <SD.h>
-//#include <SoftwareSerial.h>
 #include <SPI.h>
 #include "FileIO.h"
 #include "GpsHelper.h"
 #include "ObdHelper.h"
 
-#define GRAPH_MODE 0
-#define ENABLE_SD_LOG 1
 #define SD_SS_PIN 53
 
 #define DELAY 1000 // delay between commands in milliseconds
@@ -37,6 +34,7 @@ void setup()
 #if DEBUG
     Serial.print(F("Failed to connect to OBD"));
 #endif
+    // Sometimes works if it is reset
     ResetFunction();
     while(1);
   }

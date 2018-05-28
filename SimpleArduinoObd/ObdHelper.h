@@ -1,11 +1,11 @@
 // HEADERS
 ////////////////////////
-//#include <SoftwareSerial.h>
 #include "Strings.h"
 
 // DEFINES
 ////////////////////////
-#define BT_PWR 18
+#define BT_PWR 19
+#define BT_GND 18
 #define BT_KEY 3
 //#define BT_RX 4
 //#define BT_TX 3
@@ -18,10 +18,11 @@
 
 #define SHOW_OUTPUT false
 
+// Change this according to your vehicle!
+#define RESPONSE_PREFIX_OFFSET 4
+
 // GLOBAL VARIABLES
 ////////////////////////
-
-//Serial2 Serial2(BT_RX, BT_TX); // RX , TX
 
 struct ObdHolder
 {
@@ -93,6 +94,8 @@ bool WaitForResponse(bool clearResponse, bool showResponse);
 
 bool InitBluetoothComms()
 {
+  pinMode(BT_GND, OUTPUT);
+  digitalWrite(BT_GND, LOW);
   pinMode(BT_PWR, OUTPUT);
   digitalWrite(BT_PWR, LOW);
   pinMode(BT_KEY, OUTPUT);
@@ -276,13 +279,13 @@ void GetObdReadings(const ObdHolder* holder)
 
       // Ford Fiesta echos the command send, and immediately follows with the 
       // response. Remove the first 4 bytes of echoed command bytes.
-      numberOfCmdsReceived = (responseIndex - 4) / 3; 
+      numberOfCmdsReceived = (responseIndex - RESPONSE_PREFIX_OFFSET) / 3; 
       memset(receivedCommands, 0, sizeof(receivedCommands));
       int commandIndex = 0;
       *pValue = 0; 
       *pAddition = 0;
       // Convert the response from the OBD to actual numbers (instead of a char array)
-      for(int i = 4; i < responseIndex; i++)
+      for(int i = RESPONSE_PREFIX_OFFSET; i < responseIndex; i++)
       {
         // Only get the numbers if they are part of a hex digit. If it is not a hex digit,
         // the command has been completed, so move on to the next character.
